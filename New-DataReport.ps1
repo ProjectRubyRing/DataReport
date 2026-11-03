@@ -193,15 +193,15 @@ function Get-Step([double]$range, [int]$bins) {   # 区間幅を 1・2・2.5・5
 function Get-NumericHistogram([double[]]$x, [int[]]$w, [double]$lo, [double]$hi, [bool]$isInt) {
     if ($isInt -and $hi - $lo -le 40) { $step = 1.0; $start = $lo }
     else {
-        $step = Get-Step ($hi - $lo) $TH.HistBins; if ($isInt) { $step = [Math]::Max(1, [Math]::Ceiling($step)) }
+        $step = Get-Step ($hi - $lo) $TH.HistBins; if ($isInt) { $step = [Math]::Max(1.0, [Math]::Ceiling($step)) }   # 1 と書くと Int32 版の Max が選ばれ、大きい値で桁あふれする
         $start = [Math]::Floor($lo / $step) * $step
     }
     $nb = [int][Math]::Floor(($hi - $start) / $step) + 1
     $bins = [double[]]::new($nb); $under = 0; $over = 0
     for ($i = 0; $i -lt $x.Count; $i++) {
         if ($x[$i] -lt $start) { $under += $w[$i]; continue }
-        $b = [int][Math]::Floor(($x[$i] - $start) / $step)
-        if ($b -ge $nb) { $over += $w[$i] } else { $bins[$b] += $w[$i] }
+        $b = [Math]::Floor(($x[$i] - $start) / $step)   # 外れ値は Int32 を超えるので、範囲内と判定してから添字にする
+        if ($b -ge $nb) { $over += $w[$i] } else { $bins[[int]$b] += $w[$i] }
     }
     $dec = if ($step -ge 1) { 0 } else { [int][Math]::Ceiling(-[Math]::Log10($step)) }
     $f = "{0:N$dec}"
@@ -1027,7 +1027,7 @@ try {
     $pts = @($Profiles | Where-Object { $_.NonNull -gt 0 -and $_.Distinct -gt 0 })
     $ptHi = @($pts | Where-Object { $_.Distinct -ge $TH.LowCard } | ForEach-Object { , @($_.NonNull, $_.Distinct) })
     $ptLo = @($pts | Where-Object { $_.Distinct -lt $TH.LowCard } | ForEach-Object { , @($_.NonNull, $_.Distinct) })
-    $axMax = [Math]::Pow(10, [Math]::Max(1, [Math]::Ceiling([Math]::Log10([Math]::Max(10, $maxRows)))))
+    $axMax = [Math]::Pow(10, [Math]::Max(1, [Math]::Ceiling([Math]::Log10([Math]::Max(10.0, $maxRows)))))
     Write-Block 1 13 @('非NULL件数', 'ユニーク数') $ptHi
     Write-Block 1 15 @('非NULL件数', 'ユニーク数') $ptLo
     Write-Block 1 17 @('x', 'y') @(@(1, 1), @($axMax, $axMax))                   # 一意の対角線
