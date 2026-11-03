@@ -6,6 +6,8 @@
   .\New-DataReport.ps1 -CsvDir C:\export\mydb -OutFile C:\report\mydb.xlsx -KeyColumn @{ orders = 'order_no' }
 .NOTES
   前提: 1 行目が列名 / ファイル名 = テーブル名 / 空値 = NULL。文字コード(UTF-8・Shift_JIS)は自動判定。Excel(Microsoft 365)が必要。
+  このファイルは必ず「UTF-8 (BOM 付き)」で保存すること。BOM なしで保存すると PowerShell 5.1 が Shift_JIS として読み込み、
+  日本語が文字化けして「終わりの '}' が存在しません」「トークン ')' を使用できません」等の構文エラーで起動できなくなる。
 #>
 param(
     [Parameter(Mandatory)][string]$CsvDir,
@@ -20,7 +22,7 @@ $NAVY, $BURG, $GRAY, $LIGHT = 0x4C2B1A, 0x200080, 0x333333, 0xF2F2F2   # Excel �
 $LIMIT = 1048572                                                     # 全データの格納上限（Excel 最大行 - 見出し 4 行）
 $sum, $dist, $pre, $all = 1..4 | ForEach-Object { , [Collections.Generic.List[object]]::new() }
 $total = 0
-function Cut([string]$s, $n = 40) { if ($s.Length -gt $n) { $s.Substring(0, $n) + '…' } else { $s } }   # 長い値は省略表示
+function Cut([string]$s, $n = 40) { if ($s.Length -gt $n) { $s.Substring(0, $n - [char]::IsHighSurrogate($s[$n - 1])) + '…' } else { $s } }   # 長い値は省略表示（𠮷 等のサロゲートペアの途中では切らない）
 
 foreach ($f in Get-ChildItem -LiteralPath $CsvDir -Filter *.csv | Sort-Object Name) {
     # 文字コード判定（UTF-8 として不正なら Shift_JIS）→ CSV 解析（"" 囲み内のカンマ・改行に対応）
@@ -36,9 +38,11 @@ foreach ($f in Get-ChildItem -LiteralPath $CsvDir -Filter *.csv | Sort-Object Na
     # 項目別データ分布
     for ($c = 0; $c -lt $hdr.Count; $c++) {
         $cnt = [Collections.Generic.Dictionary[string, int]]::new(); $nul = 0; $len = 0
-        foreach ($r in $rows) { $v = [string]$r[$c]; if ($v -eq '') { $nul++ } else { $cnt[$v]++; if ($v.Length -gt $len) { $len = $v.Length } } }
-        $k = [string[]]$cnt.Keys; $avg = $null
-        $type = if (!$k) { '-' } elseif (!($k -notmatch '^-?(0|[1-9]\d*)(\.\d+)?$')) { '数値' } elseif (!($k -notmatch '^\d{4}[-/]\d\d?[-/]\d\d?')) { '日時' } else { '文字列' }
+        foreach ($r in $rows) {   # 最大長は文字数（サロゲートペアは 1 文字 = MySQL の CHAR_LENGTH と同じ）
+            $v = [string]$r[$c]; if ($v -eq '') { $nul++ } else { $cnt[$v]++; if ($v.Length -gt $len) { $len = [Math]::Max($len, $v.Length - [regex]::Matches($v, '[\uD800-\uDBFF]').Count) } }
+        }
+        $k = [string[]]$cnt.Keys; $avg = $null   # 数字は [0-9] で判定（\d は全角数字等にも一致し、数値変換で停止するため）
+        $type = if (!$k) { '-' } elseif (!($k -notmatch '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$')) { '数値' } elseif (!($k -notmatch '^[0-9]{4}[-/][0-9][0-9]?[-/][0-9][0-9]?')) { '日時' } else { '文字列' }
         if ($type -eq '数値') { [Array]::Sort([double[]]$k, $k); $avg = 0; foreach ($e in $cnt.GetEnumerator()) { $avg += [double]$e.Key * $e.Value / ($n - $nul) } }
         else { [Array]::Sort($k, [StringComparer]::Ordinal) }
         $tk = [string[]]$cnt.Keys; $tv = [int[]]$cnt.Values; [Array]::Sort($tv, $tk)   # 出現回数の昇順
@@ -50,9 +54,9 @@ foreach ($f in Get-ChildItem -LiteralPath $CsvDir -Filter *.csv | Sort-Object Na
     }
     $sum.Add(@($t, $n, $hdr.Count, $hdr[$ki], $ku, ((@(if (!$n) { 'データなし' }) + $kw) -join '／')))
 
-    # キー項目の先頭1桁カテゴリ別件数
+    # キー項目の先頭1桁カテゴリ別件数（サロゲートペア・異体字セレクタ付きの字も 1 文字として扱う）
     $pc = [Collections.Generic.Dictionary[string, int]]::new()
-    foreach ($r in $rows) { $v = [string]$r[$ki]; $pc[$(if ($v) { $v.Substring(0, 1) } else { '(空白)' })]++ }
+    foreach ($r in $rows) { $v = [string]$r[$ki]; $pc[$(if ($v) { [Globalization.StringInfo]::GetNextTextElement($v) } else { '(空白)' })]++ }
     $pk = [string[]]$pc.Keys; [Array]::Sort($pk, [StringComparer]::Ordinal)
     foreach ($x in $pk) { $pre.Add(@($t, $hdr[$ki], $x, $pc[$x], ($pc[$x] / $n))) }
 
